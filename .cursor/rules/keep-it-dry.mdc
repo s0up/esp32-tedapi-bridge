@@ -1,0 +1,12 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+Do not explain your actions in code comments or function names.  Never add unecessary commentary like "foo_improved" in function names.  Do not leave unecessary reasoning in your code comments.  
+
+Never add requirements without being asked (e.g. adding a README for no reason)
+
+NEVER add unecessary failover logic nor backwards compatibility when fixing methods
+
+If you have code that looks right but get linting errors, stop and ask me to re-build it instead of trying alternatives.

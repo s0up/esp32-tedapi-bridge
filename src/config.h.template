@@ -1,0 +1,7 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#define POWERWALL_WIFI_SSID "TeslaPW_GZSZHP"
+#define POWERWALL_WIFI_PASSWORD "SDFDSFDS3"
+
+#endif // CONFIG_H

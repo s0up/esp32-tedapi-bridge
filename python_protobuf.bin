@@ -1,0 +1,35 @@
+
+
+1707000-11-L--TG1250700025WH‚π
+νΦΡ query DeviceControllerQuery {
+  control {
+    systemStatus {
+        nominalFullPackEnergyWh
+        nominalEnergyRemainingWh
+    }
+    islanding {
+        customerIslandMode
+        contactorClosed
+        microGridOK
+        gridOK
+    }
+    meterAggregates {
+      location
+      realPowerW
+    }
+    alerts {
+      active
+    }
+    batteryBlocks {
+      din
+      disableReasons
+    }
+  }
+  system {
+    time
+    sitemanagerStatus {
+      isRunning
+    }
+  }
+}‰0†A±—¥­µΊΡr¨½jΕ0¶BΆ΄pO²vd·ΞώÒV*φεΫg_/`•_qc$ΣyΎ~έA1xAp_΄]Δ>ςξ¥VΑ*Η¦]‚ΆλI~ΪΟήqΟΙ΄ΝόυsΊ•#o!Νzλεz–υαµ®rϋΛ/"
+{}
