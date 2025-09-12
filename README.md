@@ -2,6 +2,8 @@
 
 ESP32 firmware that connects directly to a Tesla Powerwall 3 gateway over its local Wi‑Fi and broadcasts key stats via BTHome BLE for easy Home Assistant discovery. Built for LilyGO TTGO T‑Display (ESP32), but easily portable to other ESP32 boards.
 
+The Tesla TEDAPI 
+
 ## Hardware
 - **Target board**: LilyGO TTGO T‑Display (ESP32)
 - **Display**: Onboard ST7789 240x135 TFT (rendered battery and power stats)
@@ -48,3 +50,6 @@ ESP32 firmware that connects directly to a Tesla Powerwall 3 gateway over its lo
 ## Troubleshooting
 - Not connecting: double‑check SSID/password in `src/config.h`, and ensure you’re near the gateway.
 - No BLE in HA: enable the BTHome integration and ensure your HA host supports passive BLE; bring the ESP32 closer.
+
+## License
+MIT — see `LICENSE` for details.
