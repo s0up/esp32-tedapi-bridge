@@ -56,4 +56,6 @@ void loop() {
 
   // Continuous maintenance (WiFi/DIN)
   powerwall->maintain();
+  // BLE advertiser frame alternation at ~1Hz
+  if (bthome) bthome->tick();
 }

@@ -39,8 +39,8 @@ Wouldn't have been possible without all of the R&D done over at https://github.c
   - Solar power (W)
   - Load power (W)
   - Site power (W) — grid import (+) / export (−) as reported
-  - Grid connected (boolean)
-- To fit BLE limits, power metrics alternate across frames; HA aggregates them automatically when within range.
+  - Battery power (W)
+- The BLE advertisement contains battery percent followed by four power values in a fixed order: solar, load, site, battery. The payload is broadcast about once per second.
 
 ## Networking notes
 - The ESP32 must be in range of the Powerwall gateway’s Wi‑Fi. It connects only to that SSID and does not require internet.
