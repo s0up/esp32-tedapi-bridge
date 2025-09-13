@@ -49,6 +49,13 @@ private:
   // Optional runtime/provisioned TEDAPI code override to avoid hardcoding
   std::vector<uint8_t> authCodeOverride;
   bool useAuthOverride = false;
+  // Connection maintenance/backoff
+  unsigned long lastWifiAttemptMs = 0;
+  unsigned long wifiBackoffMs = 0;
+  unsigned long lastDINFetchMs = 0;
+  // Reusable buffers to avoid heap churn
+  std::vector<uint8_t> requestBuffer;
+  std::vector<uint8_t> responseBuffer;
   
   bool connectToWiFi();
   bool connectTEDAPI();
@@ -60,12 +67,13 @@ private:
     bool getConfig();
     bool requestFirmware();
     void parseStatusData(const uint8_t* data, size_t len);
-    void parseBatteryData(const uint8_t* data, size_t len);
+    bool parseBatteryData(const uint8_t* data, size_t len);
     bool loadAuthCodeOverrideFromConfig();
 
 public:
   Powerwall(const char* wifiSSID, const char* gatewayPassword);
   bool begin();
+  void maintain();
   PowerwallData getData();
   HomeAutomationData getHomeData();
   bool isConnected();

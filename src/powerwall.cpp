@@ -11,6 +11,7 @@ static bool extractConfigCodeFromMessage(const uint8_t* p, const uint8_t* end, s
 Powerwall::Powerwall(const char* wifiSSID, const char* gatewayPassword) {
   ssid = wifiSSID;
   gw_pwd = gatewayPassword;
+  wifiBackoffMs = 0;
 }
 
 bool Powerwall::begin() {
@@ -19,6 +20,42 @@ bool Powerwall::begin() {
     return false;
   }
   return connectTEDAPI();
+}
+
+void Powerwall::maintain() {
+  // Non-blocking maintenance: handle WiFi reconnects with backoff and ensure DIN
+  unsigned long now = millis();
+  if (WiFi.status() != WL_CONNECTED) {
+    wifiConnected = false;
+    if (wifiBackoffMs == 0) wifiBackoffMs = 1000; // start at 1s
+    if (now - lastWifiAttemptMs >= wifiBackoffMs) {
+      lastWifiAttemptMs = now;
+      Serial.println("WiFi disconnected; attempting reconnect...");
+      // Try a reconnect sequence
+      WiFi.disconnect(true);
+      delay(50);
+      connectToWiFi();
+      // Update backoff
+      if (WiFi.status() == WL_CONNECTED) {
+        wifiBackoffMs = 0;
+      } else {
+        wifiBackoffMs = min<unsigned long>(wifiBackoffMs * 2, 60000UL); // cap 60s
+      }
+    }
+    return;
+  }
+  // WiFi connected
+  wifiConnected = true;
+  wifiBackoffMs = 0;
+
+  // Ensure DIN is available once per boot or if cleared
+  if (din.isEmpty()) {
+    // Avoid tight loop on DIN fetch
+    if (now - lastDINFetchMs > 10000) {
+      lastDINFetchMs = now;
+      connectTEDAPI();
+    }
+  }
 }
 
 bool Powerwall::connectToWiFi() {
@@ -60,7 +97,11 @@ bool Powerwall::connectTEDAPI() {
   // Get DIN first (required for TEDAPI communication)
   if (!getDIN()) {
     Serial.println("Failed to get DIN from TEDAPI");
-    return false;
+    client.stop();
+    delay(50);
+    if (!getDIN()) {
+      return false;
+    }
   }
   
   Serial.printf("Successfully connected to TEDAPI with DIN: %s\n", din.c_str());
@@ -115,11 +156,13 @@ bool Powerwall::sendProtobufRequest(const uint8_t* data, size_t len, uint8_t* re
 }
 
 bool Powerwall::sendProtobufRequestTo(const char* path, const uint8_t* data, size_t len, uint8_t* response, size_t responseCapacity, size_t* responseLen) {
-  if (!client.connected()) {
-    if (!client.connect(TEDAPI_HOST, TEDAPI_PORT)) {
-      Serial.println("Failed to reconnect to TEDAPI");
-      return false;
-    }
+  if (client.connected()) {
+    client.stop();
+    delay(10);
+  }
+  if (!client.connect(TEDAPI_HOST, TEDAPI_PORT)) {
+    Serial.println("Failed to connect to TEDAPI");
+    return false;
   }
   
   // Build HTTP header. Gateway accepts Basic auth for TEDAPI posts on some firmwares; include it to avoid 403.
@@ -128,7 +171,7 @@ bool Powerwall::sendProtobufRequestTo(const char* path, const uint8_t* data, siz
   String header = String("POST ") + String(path) + String(" HTTP/1.1\r\n") +
                   "Host: " + TEDAPI_HOST + "\r\n" +
                   "Authorization: Basic " + authEncoded + "\r\n" +
-                  "Content-Type: application/octet-string\r\n" +
+                  "Content-Type: application/octet-stream\r\n" +
                   "Content-Length: " + String(len) + "\r\n" +
                   "Connection: close\r\n\r\n";  // MATCH PYTHON: use Connection: close
   
@@ -154,7 +197,12 @@ bool Powerwall::sendProtobufRequestTo(const char* path, const uint8_t* data, siz
     }
   }
   
-  // Headers read complete
+  // Headers read complete; sanity check
+  if (httpResponse.length() == 0) {
+    Serial.println("TEDAPI request failed - empty header");
+    client.stop();
+    return false;
+  }
   
   // Check for 200 OK
   if (httpResponse.indexOf("200 OK") < 0) {
@@ -927,22 +975,13 @@ bool Powerwall::getBatteryData() {
     0x0C,0xB5,0xAE,0x72,0xFB,0xCB,0x2F,0x17,0x1F
   };
 
-  // Use heap allocation to avoid stack overflow; larger buffer for full Python query
-  // Reduce request capacity; our assembled protobuf is ~7KB
-  const size_t requestCapacity = 8192;
-  uint8_t* requestBuf = (uint8_t*)malloc(requestCapacity);
-  // Battery response can be large; allow up to 32KB to capture full recv.text JSON
-  // Limit response capacity; typical recv.text payload < 20KB
-  const size_t responseCapacity = 24576;
-  uint8_t* responseBuf = (uint8_t*)malloc(responseCapacity);
-  if (!requestBuf || !responseBuf) {
-    Serial.println("Failed to allocate memory for buffers");
-    if (requestBuf) free(requestBuf);
-    if (responseBuf) free(responseBuf);
-    return false;
-  }
-  
-  // Clear buffers to prevent data leakage
+  // Reuse persistent buffers to avoid heap fragmentation
+  const size_t requestCapacity = 8192;      // ~7KB assembled
+  const size_t responseCapacity = 24576;    // typical < 20KB
+  if (requestBuffer.size() < requestCapacity) requestBuffer.resize(requestCapacity);
+  if (responseBuffer.size() < responseCapacity) responseBuffer.resize(responseCapacity);
+  uint8_t* requestBuf = requestBuffer.data();
+  uint8_t* responseBuf = responseBuffer.data();
   memset(requestBuf, 0, requestCapacity);
   memset(responseBuf, 0, responseCapacity);
   
@@ -1026,7 +1065,7 @@ bool Powerwall::getBatteryData() {
   // Using embedded DER auth code for status query
     requestBuf[len++] = 0x1A; // field 3, wire type 2
   len += encodeVarint(&requestBuf[len], codeLen);
-  if (len + codeLen > requestCapacity) { Serial.println("Request overflow on auth code"); free(requestBuf); free(responseBuf); return false; }
+  if (len + codeLen > requestCapacity) { Serial.println("Request overflow on auth code"); return false; }
   memcpy_P(&requestBuf[len], authCodeStatus, codeLen);
   len += codeLen;
   
@@ -1050,42 +1089,40 @@ bool Powerwall::getBatteryData() {
   // Print hex dump of our protobuf for debugging
   // Skip protobuf hex dump
   
-  size_t responseLen;
-  
-  // Choose path based on number of devices
+  size_t responseLen = 0;
   const char* path = "/tedapi/v1";
-  if (sendProtobufRequestTo(path, requestBuf, len, responseBuf, responseCapacity, &responseLen)) {
-    // Minimal logging
-    
-    // Try to parse valid JSON; if not present or we see an auth error string, retry with alternate auth code
-    bool hasJson = false;
-    for (size_t i = 0; i < responseLen; i++) {
-      if (responseBuf[i] == '{') { hasJson = true; break; }
+
+  const int maxAttempts = 5;
+  unsigned long backoffMs = 100;
+  for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+    bool ok = sendProtobufRequestTo(path, requestBuf, len, responseBuf, responseCapacity, &responseLen);
+    if (ok) {
+      bool hasJson = false;
+      for (size_t i = 0; i < responseLen; i++) { if (responseBuf[i] == '{') { hasJson = true; break; } }
+      bool authError = false;
+      const char* needle = "missing AuthEnvelo";
+      size_t nlen = strlen(needle);
+      for (size_t i = 0; i + nlen <= responseLen; i++) { size_t k = 0; while (k < nlen && (char)responseBuf[i+k] == needle[k]) k++; if (k == nlen) { authError = true; break; } }
+      if (hasJson && !authError) {
+        if (parseBatteryData(responseBuf, responseLen)) {
+          return true;
+        } else {
+          Serial.println("Battery query returned JSON but no valid metrics");
+        }
+      } else {
+        Serial.println("Battery query failed (invalid payload)");
+      }
+    } else {
+      Serial.printf("Battery query attempt %d failed (transport)\n", attempt);
     }
-    // Detect ASCII "missing AuthEnvelo" in response
-    bool authError = false;
-    const char* needle = "missing AuthEnvelo";
-    size_t nlen = strlen(needle);
-    for (size_t i = 0; i + nlen <= responseLen; i++) {
-      size_t k = 0; while (k < nlen && (char)responseBuf[i+k] == needle[k]) k++;
-      if (k == nlen) { authError = true; break; }
-    }
-    
-    // Skip ASCII dump
-    
-    if (hasJson && !authError) {
-      parseBatteryData(responseBuf, responseLen);
-      free(requestBuf);
-      free(responseBuf);
-      return true;
-    }
-    Serial.println("Battery query failed");
-    free(requestBuf);
-    free(responseBuf);
-    return false;
+
+    // Decide whether to retry
+    if (WiFi.status() != WL_CONNECTED) break; // no wifi
+    client.stop();
+    int jitterMs = (int)(millis() & 0x3F); // 0-63ms jitter
+    delay(backoffMs + jitterMs);
+    backoffMs = min<unsigned long>(backoffMs * 2, 1000UL);
   }
-  free(requestBuf);
-  free(responseBuf);
   return false;
 }
 
@@ -1119,22 +1156,21 @@ bool Powerwall::requestFirmware() {
   return true;
 }
 
-void Powerwall::parseBatteryData(const uint8_t* data, size_t len) {
-  // Quiet parsing – rely on targeted recv.text extraction
+bool Powerwall::parseBatteryData(const uint8_t* data, size_t len) {
 
   // Try to extract message.payload.recv.text if present
   String recvText = extractRecvTextFromMessage(data, data + len);
   if (recvText.length()) {
     // Extract the first complete JSON object from recv.text (avoid extra String copies)
     int start = recvText.indexOf('{');
-    if (start < 0) return; // no JSON
+    if (start < 0) { return false; }
     int braces = 0; bool started = false; int end = -1;
     for (int i = start; i < recvText.length(); i++) {
       char c = recvText.charAt(i);
       if (c == '{') { braces++; started = true; }
       if (started && c == '}') { braces--; if (braces == 0) { end = i; break; } }
     }
-    if (end < 0) return; // incomplete JSON
+    if (end < 0) { return false; }
 
     const char* jsonPtr = recvText.c_str() + start;
     size_t jsonLen = (size_t)(end - start + 1);
@@ -1158,19 +1194,21 @@ void Powerwall::parseBatteryData(const uint8_t* data, size_t len) {
     fCtrl["meterAggregates"][0]["location"] = true;
     fCtrl["meterAggregates"][0]["realPowerW"] = true;
 
-    DynamicJsonDocument doc(4096);
+    DynamicJsonDocument doc(8192);
     DeserializationError err = deserializeJson(doc, jsonPtr, jsonLen, DeserializationOption::Filter(filter));
-    if (err) return;
+    if (err) { Serial.print("JSON filter-parse error: "); Serial.println(err.c_str()); return false; }
 
     JsonVariant root = doc.as<JsonVariant>();
     if (doc.containsKey("data")) {
       root = doc["data"];
     }
     JsonVariant control = root["control"];
+    if (control.isNull()) { return false; }
     JsonVariant systemStatus = control["systemStatus"];
-    float remaining = systemStatus["nominalEnergyRemainingWh"] | 0;
-    float total = systemStatus["nominalFullPackEnergyWh"] | 0;
-    if (total > 0 && remaining > 0) {
+    if (systemStatus.isNull()) { return false; }
+    float remaining = systemStatus["nominalEnergyRemainingWh"] | -1.0f;
+    float total = systemStatus["nominalFullPackEnergyWh"] | -1.0f;
+    if (total >= 0 && remaining >= 0) {
       currentData.battery_level = (remaining / total) * 100.0f;
       currentData.energy_remaining = remaining;
       currentData.total_pack_energy = total;
@@ -1202,6 +1240,16 @@ void Powerwall::parseBatteryData(const uint8_t* data, size_t len) {
           else if (strcmp(loc, "SOLAR") == 0) haData.solar_power_w = p;
           else if (strcmp(loc, "BATTERY") == 0) haData.battery_power_w = p;
         }
+      } else if (mags.is<JsonObject>()) {
+        for (JsonPair kv : mags.as<JsonObject>()) {
+          const char* loc = kv.key().c_str();
+          JsonVariant mv = kv.value();
+          float p = mv["realPowerW"] | 0.0f;
+          if (strcmp(loc, "SITE") == 0) haData.site_power_w = p;
+          else if (strcmp(loc, "LOAD") == 0) haData.load_power_w = p;
+          else if (strcmp(loc, "SOLAR") == 0) haData.solar_power_w = p;
+          else if (strcmp(loc, "BATTERY") == 0) haData.battery_power_w = p;
+        }
       }
       // Now print concise HA summary
       Serial.printf("HA: batt=%.1f%% rem=%.0fWh full=%.0fWh | site=%.0fW load=%.0fW solar=%.0fW battery=%.0fW | grid=%s mode=%s\n",
@@ -1214,9 +1262,12 @@ void Powerwall::parseBatteryData(const uint8_t* data, size_t len) {
                     haData.battery_power_w,
                     haData.grid_connected ? "connected" : "islanded",
                     haData.island_mode.c_str());
-      return;
+      return true;
     }
+
+    // If we got here, we had JSON but not the expected fields; skip this cycle quietly.
   }
   
   // Fallback scanning removed – recv.text path is sufficient
+  return false;
 } 

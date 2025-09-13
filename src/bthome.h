@@ -13,12 +13,12 @@ public:
   BTHomeAdvertiser();
   void begin(const String &deviceNameArg);
   void updateBatteryPercent(uint8_t batteryPercent);
-  void updateBatteryAndPowers(uint8_t batteryPercent, int32_t solarPowerW, int32_t loadPowerW, int32_t sitePowerW, bool gridConnected);
+  void updateBatteryAndPowers(uint8_t batteryPercent, int32_t solarPowerW, int32_t loadPowerW, int32_t batteryPowerW, int32_t sitePowerW, bool gridConnected);
 
 private:
   void startAdvertising();
   void buildAdvertisement(uint8_t batteryPercent);
-  void buildAdvertisement(uint8_t batteryPercent, int32_t solarPowerW, int32_t loadPowerW, int32_t sitePowerW, bool gridConnected);
+  void buildAdvertisement(uint8_t batteryPercent, int32_t solarPowerW, int32_t loadPowerW, int32_t batteryPowerW, int32_t sitePowerW, bool gridConnected);
 
   uint8_t lastBatteryPercent;
   bool started;

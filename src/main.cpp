@@ -47,15 +47,13 @@ void loop() {
       int32_t solarW = (int32_t)ha.solar_power_w;
       int32_t loadW = (int32_t)ha.load_power_w;
       int32_t siteW = (int32_t)ha.site_power_w;
+      int32_t battW = (int32_t)ha.battery_power_w;
       bool grid = ha.grid_connected;
-      bthome->updateBatteryAndPowers(pct, solarW, loadW, siteW, grid);
+      bthome->updateBatteryAndPowers(pct, solarW, loadW, battW, siteW, grid);
     }
     lastDebug = millis();
   }
 
-  // Reconnect if necessary
-  if (!powerwall->isConnected()) {
-    Serial.println("Reconnecting to Powerwall...");
-    powerwall->begin();
-  }
+  // Continuous maintenance (WiFi/DIN)
+  powerwall->maintain();
 }

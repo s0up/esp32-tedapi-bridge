@@ -55,10 +55,10 @@ static inline void append_s32(std::string &buf, int32_t v) {
   buf.push_back((char)((v >> 24) & 0xFF));
 }
 
-void BTHomeAdvertiser::updateBatteryAndPowers(uint8_t batteryPercent, int32_t solarPowerW, int32_t loadPowerW, int32_t sitePowerW, bool gridConnected) {
+void BTHomeAdvertiser::updateBatteryAndPowers(uint8_t batteryPercent, int32_t solarPowerW, int32_t loadPowerW, int32_t batteryPowerW, int32_t sitePowerW, bool gridConnected) {
   if (!started) return;
   if (batteryPercent > 100) batteryPercent = 100;
-  buildAdvertisement(batteryPercent, solarPowerW, loadPowerW, sitePowerW, gridConnected);
+  buildAdvertisement(batteryPercent, solarPowerW, loadPowerW, batteryPowerW, sitePowerW, gridConnected);
   startAdvertising();
   lastBatteryPercent = batteryPercent;
 }
@@ -100,12 +100,13 @@ void BTHomeAdvertiser::startAdvertising() {
   Serial.println("[BTHome] Advertising started (UUID 0xFCD2, unencrypted v2)");
 }
 
-void BTHomeAdvertiser::buildAdvertisement(uint8_t batteryPercent, int32_t solarPowerW, int32_t loadPowerW, int32_t sitePowerW, bool gridConnected) {
-  // Build payload in two alternating frames to keep size small:
-  // Frame A: battery, solar (id 1), load (id 2)
-  // Frame B: battery, site (id 3), grid boolean
+void BTHomeAdvertiser::buildAdvertisement(uint8_t batteryPercent, int32_t solarPowerW, int32_t loadPowerW, int32_t batteryPowerW, int32_t sitePowerW, bool gridConnected) {
+  // Alternate compact frames to stay within 31-byte ADV limit
+  // Use Power_32 (0x5C) with factor 0.01 W for compatibility
+  // Frame A: battery + solar(id1) + load(id2) + site(id3)
+  // Frame B: battery + batteryPower(id4) + grid boolean
   std::string serviceData;
-  serviceData.reserve(1 + 2 + 2 + 5 + 5); // rough reserve
+  serviceData.reserve(32);
   append_u8(serviceData, BTHOME_INFO_UNENCRYPTED_V2);
 
   // battery percent
@@ -121,12 +122,13 @@ void BTHomeAdvertiser::buildAdvertisement(uint8_t batteryPercent, int32_t solarP
     append_u8(serviceData, BTHOME_OBJ_POWER_32);
     append_s32(serviceData, (int32_t)scaled);
   };
+
   if (!frameFlip) {
     append_power_5c(0x01, solarPowerW);
     append_power_5c(0x02, loadPowerW);
-  } else {
     append_power_5c(0x03, sitePowerW);
-    // grid boolean
+  } else {
+    append_power_5c(0x04, batteryPowerW);
     append_u8(serviceData, BTHOME_OBJ_BOOLEAN);
     append_u8(serviceData, gridConnected ? 1 : 0);
   }
